@@ -29,11 +29,10 @@ module Shards
       private def build(target, options)
         Log.info { "Building: #{target.name}" }
 
-        args = [
-          "build",
-          "-o", File.join(Shards.bin_path, target.name),
-          target.main,
-        ]
+        args = ["build", "-o", File.join(Shards.bin_path, target.name)]
+        args << "--release" if Shards.production?
+        args << target.main
+
         options.each { |option| args << option }
         Log.debug { "crystal #{args.join(' ')}" }
 
