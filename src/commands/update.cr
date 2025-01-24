@@ -19,7 +19,7 @@ module Shards
 
         solver.prepare(development: Shards.with_development?)
 
-        packages = handle_resolver_errors { solver.solve }
+        packages = handle_resolver_errors(solver) { solver.solve }
         install(packages)
 
         if generate_lockfile?(packages)

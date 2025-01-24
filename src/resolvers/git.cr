@@ -214,10 +214,13 @@ module Shards
       end
     end
 
-    protected def versions_from_tags
+    def available_tags : Array(String)
       capture("git tag --list #{GitResolver.git_column_never}")
-        .split('\n')
-        .compact_map { |tag| Version.new($1) if tag =~ VERSION_TAG }
+        .lines.reject!(&.empty?)
+    end
+
+    protected def versions_from_tags
+      available_tags.compact_map { |tag| Version.new($1) if tag =~ VERSION_TAG }
     end
 
     def install_sources(version : Version, install_path : String)

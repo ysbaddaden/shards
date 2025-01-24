@@ -24,6 +24,10 @@ module Shards
       [spec(nil).version]
     end
 
+    def available_tags : Array(String)
+      [spec(nil).version.to_s]
+    end
+
     def local_path
       source
     end

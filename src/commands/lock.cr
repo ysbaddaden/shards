@@ -26,7 +26,7 @@ module Shards
 
         solver.prepare(development: Shards.with_development?)
 
-        packages = handle_resolver_errors { solver.solve }
+        packages = handle_resolver_errors(solver) { solver.solve }
         return if packages.empty?
 
         if print

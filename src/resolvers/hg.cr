@@ -186,6 +186,14 @@ module Shards
     rescue Error
     end
 
+    def available_tags : Array(String)
+      tags = capture("hg tags --template #{Process.quote("{tag}\n")}")
+        .lines
+        .sort!
+
+      tags.reject!(&.empty?)
+    end
+
     def available_releases : Array(Version)
       update_local_cache
       versions_from_tags
@@ -221,10 +229,11 @@ module Shards
     end
 
     protected def versions_from_tags
-      capture("hg tags --template #{Process.quote("{tag}\n")}")
+      tags = capture("hg tags --template #{Process.quote("{tag}\n")}")
         .lines
         .sort!
-        .compact_map { |tag| Version.new($1) if tag =~ VERSION_TAG }
+
+      tags.compact_map { |tag| Version.new($1) if tag =~ VERSION_TAG }
     end
 
     def install_sources(version : Version, install_path : String)

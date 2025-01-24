@@ -54,6 +54,8 @@ module Shards
       end
     end
 
+    abstract def available_tags : Array(String)
+
     abstract def available_releases : Array(Version)
 
     def latest_version_for_ref(ref : Ref?) : Version

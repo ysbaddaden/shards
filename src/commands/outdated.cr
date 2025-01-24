@@ -18,7 +18,7 @@ module Shards
         solver = MolinilloSolver.new(spec, override, prereleases: @prereleases)
         solver.prepare(development: Shards.with_development?)
 
-        packages = handle_resolver_errors { solver.solve }
+        packages = handle_resolver_errors(solver) { solver.solve }
         packages.each { |package| analyze(package) }
 
         if @up_to_date

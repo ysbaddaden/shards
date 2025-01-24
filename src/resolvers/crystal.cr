@@ -10,6 +10,10 @@ module Shards
       [Version.new Shards.crystal_version]
     end
 
+    def available_tags : Array(String)
+      [Shards.crystal_version]
+    end
+
     def read_spec(version : Version) : String?
       nil
     end

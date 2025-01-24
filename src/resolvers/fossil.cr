@@ -212,10 +212,13 @@ module Shards
       end
     end
 
-    protected def versions_from_tags
+    def available_tags : Array(String)
       capture("fossil tag list -R #{Process.quote(local_fossil_file)}")
-        .split('\n')
-        .compact_map { |tag| Version.new($1) if tag =~ VERSION_TAG }
+        .lines.reject!(&.empty?)
+    end
+
+    protected def versions_from_tags
+      available_tags.compact_map { |tag| Version.new($1) if tag =~ VERSION_TAG }
     end
 
     def install_sources(version : Version, install_path : String)
