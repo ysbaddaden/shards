@@ -46,9 +46,6 @@ BINDIR ?= $(DESTDIR)$(PREFIX)/bin
 MANDIR ?= $(DESTDIR)$(PREFIX)/share/man
 INSTALL ?= /usr/bin/install
 
-MOLINILLO_VERSION = $(shell $(CRYSTAL) eval 'require "yaml"; puts YAML.parse(File.read("shard.lock"))["shards"]["molinillo"]["version"]')
-MOLINILLO_URL = "https://github.com/crystal-lang/crystal-molinillo/archive/v$(MOLINILLO_VERSION).tar.gz"
-
 # MSYS2 support (native Windows should use `Makefile.win` instead)
 ifeq ($(OS),Windows_NT)
   EXE := .exe
@@ -105,11 +102,10 @@ test_integration: bin/shards$(EXE)
 	$(CRYSTAL) spec ./spec/integration/
 
 lib: shard.lock
-	mkdir -p lib/molinillo
-	$(SHARDS) install || (curl -L $(MOLINILLO_URL) | tar -xzf - -C lib/molinillo --strip-components=1)
+	$(SHARDS) install
 
 shard.lock: shard.yml
-	[ $(SHARDS) = false ] || $(SHARDS) update
+	$(SHARDS) update
 
 man/%.gz: man/%
 	gzip -c -9 $< > $@

@@ -1,6 +1,5 @@
 /.crystal
 /.shards
-/lib
 /bin/shards
 /bin/shards.dwarf
 /bin/shards.exe

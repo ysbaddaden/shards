@@ -1,0 +1,6 @@
+---
+version: 1.0
+shards:
+  molinillo:
+    git: https://github.com/crystal-lang/crystal-molinillo.git
+    version: 0.2.0

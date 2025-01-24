@@ -1,0 +1,9 @@
+name: molinillo
+version: 0.2.0
+
+authors:
+  - Juan Wajnerman <waj@manas.tech>
+
+crystal: ">= 0.35.0, < 2.0.0"
+
+license: MIT

@@ -1,0 +1,3 @@
+[submodule "spec/fixture"]
+	path = spec/fixture
+	url = https://github.com/CocoaPods/Resolver-Integration-Specs
