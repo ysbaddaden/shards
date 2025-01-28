@@ -1,5 +1,5 @@
 require "uri"
-require "./resolver"
+require "./version_control"
 require "../versions"
 require "../logger"
 require "../helpers"
@@ -127,11 +127,8 @@ module Shards
     end
   end
 
-  class HgResolver < Resolver
-    @@has_hg_command : Bool?
-    @@hg_version : String?
-
-    @origin_url : String?
+  class HgResolver < VersionControlResolver
+    @@extension = ""
 
     def self.key
       "hg"
@@ -146,15 +143,15 @@ module Shards
       end
     end
 
-    protected def self.has_hg_command?
-      if @@has_hg_command.nil?
-        @@has_hg_command = (Process.run("hg", ["--version"]).success? rescue false)
+    protected def self.command?
+      if @@command.nil?
+        @@command = (Process.run("hg", ["--version"]).success? rescue false)
       end
-      @@has_hg_command
+      @@command
     end
 
-    protected def self.hg_version
-      @@hg_version ||= `hg --version`[/\(version\s+([^)]*)\)/, 1]
+    protected def self.version
+      @@version ||= `hg --version`[/\(version\s+([^)]*)\)/, 1]
     end
 
     def read_spec(version : Version) : String?
@@ -179,16 +176,6 @@ module Shards
       rescue Error
         nil
       end
-    end
-
-    private def spec?(version)
-      spec(version)
-    rescue Error
-    end
-
-    def available_releases : Array(Version)
-      update_local_cache
-      versions_from_tags
     end
 
     def latest_version_for_ref(ref : HgRef?) : Version
@@ -242,7 +229,7 @@ module Shards
 
     def local_path
       @local_path ||= begin
-        uri = parse_uri(hg_url)
+        uri = parse_uri(vcs_url)
 
         path = uri.path
         path = Path[path]
@@ -257,10 +244,6 @@ module Shards
           File.join(Shards.cache_path, path)
         end
       end
-    end
-
-    def hg_url
-      source.strip
     end
 
     def parse_requirement(params : Hash(String, String)) : Requirement
@@ -282,7 +265,7 @@ module Shards
 
     record HgVersion, value : String, commit : String? = nil
 
-    private def parse_hg_version(version : Version) : HgVersion
+    private def parse_version(version : Version) : HgVersion
       case version.value
       when VERSION_REFERENCE
         HgVersion.new version.value
@@ -294,37 +277,12 @@ module Shards
     end
 
     private def hg_ref(version : Version) : HgRef
-      hg_version = parse_hg_version(version)
-      if commit = hg_version.commit
+      version = parse_version(version)
+      if commit = version.commit
         HgCommitRef.new commit
       else
-        HgTagRef.new "v#{hg_version.value}"
+        HgTagRef.new "v#{version.value}"
       end
-    end
-
-    def update_local_cache
-      if cloned_repository? && origin_changed?
-        delete_repository
-        @updated_cache = false
-      end
-
-      return if Shards.local? || @updated_cache
-      Log.info { "Fetching #{hg_url}" }
-
-      if cloned_repository?
-        # repositories cloned with shards v0.8.0 won't fetch any new remote
-        # refs; we must delete them and clone again!
-        if valid_repository?
-          fetch_repository
-        else
-          delete_repository
-          mirror_repository
-        end
-      else
-        mirror_repository
-      end
-
-      @updated_cache = true
     end
 
     private def mirror_repository
@@ -332,34 +290,23 @@ module Shards
       FileUtils.rm_r(path) if File.exists?(path)
       Dir.mkdir_p(path)
 
-      source = hg_url
+      source = vcs_url
       # Remove a "file://" from the beginning, otherwise the path might be invalid
       # on Windows.
       source = source.lchop("file://")
 
-      hg_retry(err: "Failed to clone #{source}") do
+      vcs_retry(err: "Failed to clone #{source}") do
         # We checkout the working directory so that "." is meaningful.
         #
         # An alternative would be to use the `@` bookmark, but only as long
         # as nothing new is committed.
-        run_in_current_folder "hg clone --quiet -- #{Process.quote(source)} #{Process.quote(path)}"
+        run_in_folder "hg clone --quiet -- #{Process.quote(source)} #{Process.quote(path)}"
       end
     end
 
     private def fetch_repository
-      hg_retry(err: "Failed to update #{hg_url}") do
+      vcs_retry(err: "Failed to update #{vcs_url}") do
         run "hg pull"
-      end
-    end
-
-    private def hg_retry(err = "Failed to update repository", &)
-      retries = 0
-      loop do
-        return yield
-      rescue ex : Error
-        retries += 1
-        next if retries < 3
-        raise Error.new("#{err}: #{ex}")
       end
     end
 
@@ -381,95 +328,22 @@ module Shards
       @origin_url ||= capture("hg paths default").strip
     end
 
-    # Returns whether origin URLs have differing hosts and/or paths.
-    protected def origin_changed?
-      return false if origin_url == hg_url
-      return true if origin_url.nil? || hg_url.nil?
-
-      origin_parsed = parse_uri(origin_url)
-      hg_parsed = parse_uri(hg_url)
-
-      (origin_parsed.host != hg_parsed.host) || (origin_parsed.path != hg_parsed.path)
-    end
-
-    # Parses a URI string, with additional support for ssh+git URI schemes.
-    private def parse_uri(raw_uri)
-      # Need to check for file URIs early, otherwise generic parsing will fail on a colon.
-      if (path = raw_uri.lchop?("file://"))
-        return URI.new(scheme: "file", path: path)
-      end
-
-      # Try normal URI parsing first
-      uri = URI.parse(raw_uri)
-      return uri if uri.absolute? && !uri.opaque?
-
-      # Otherwise, assume and attempt to parse the scp-style ssh URIs
-      host, _, path = raw_uri.partition(':')
-
-      if host.includes?('@')
-        user, _, host = host.partition('@')
-      end
-
-      # Normalize leading slash, matching URI parsing
-      unless path.starts_with?('/')
-        path = '/' + path
-      end
-
-      URI.new(scheme: "ssh", host: host, path: path, user: user)
-    end
-
     private def file_exists?(ref : HgRef, path)
       run("hg files -r #{Process.quote(ref.to_hg_revset)} -- #{Process.quote(path)}", raise_on_fail: false)
     end
 
-    private def capture(command, path = local_path)
-      run(command, capture: true, path: path).as(String)
-    end
-
-    private def run(command, path = local_path, capture = false, raise_on_fail = true)
-      if Shards.local? && !Dir.exists?(path)
-        dependency_name = File.basename(path)
-        raise Error.new("Missing repository cache for #{dependency_name.inspect}. Please run without --local to fetch it.")
-      end
-      Dir.cd(path) do
-        run_in_current_folder(command, capture, raise_on_fail: raise_on_fail)
-      end
-    end
-
-    private def run_in_current_folder(command, capture = false, raise_on_fail = true)
-      unless HgResolver.has_hg_command?
+    private def error_if_command_is_missing
+      unless HgResolver.command?
         raise Error.new("Error missing hg command line tool. Please install Mercurial first!")
       end
-
-      Log.debug { command }
-
-      output = capture ? IO::Memory.new : Process::Redirect::Close
-      error = IO::Memory.new
-      status = Process.run(command, shell: true, output: output, error: error)
-
-      if status.success?
-        if capture
-          output.to_s
-        else
-          true
-        end
-      elsif raise_on_fail
-        str = error.to_s
-        if str.starts_with?("abort: ") && (idx = str.index('\n'))
-          message = str[7...idx]
-          raise Error.new("Failed #{command} (#{message}). Maybe a commit, branch, bookmark or file doesn't exist?")
-        else
-          raise Error.new("Failed #{command}.\n#{str}")
-        end
-      end
     end
 
-    def report_version(version : Version) : String
-      hg_version = parse_hg_version(version)
-      if commit = hg_version.commit
-        "#{hg_version.value} at #{commit[0...7]}"
+    private def error_for_run_failure(command, str : String)
+      if str.starts_with?("abort: ") && (idx = str.index('\n'))
+        message = str[7...idx]
+        raise Error.new("Failed #{command} (#{message}). Maybe a commit, branch, bookmark or file doesn't exist?")
       else
-        version.value
+        raise Error.new("Failed #{command}.\n#{str}")
       end
     end
 

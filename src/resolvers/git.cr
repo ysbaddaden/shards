@@ -1,5 +1,5 @@
 require "uri"
-require "./resolver"
+require "./version_control"
 require "../versions"
 require "../logger"
 require "../helpers"
@@ -89,12 +89,9 @@ module Shards
     end
   end
 
-  class GitResolver < Resolver
-    @@has_git_command : Bool?
+  class GitResolver < VersionControlResolver
+    @@extension = ".git"
     @@git_column_never : String?
-    @@git_version : String?
-
-    @origin_url : String?
 
     def self.key
       "git"
@@ -136,19 +133,19 @@ module Shards
       end
     end
 
-    protected def self.has_git_command?
-      if @@has_git_command.nil?
-        @@has_git_command = (Process.run("git", ["--version"]).success? rescue false)
+    protected def self.command?
+      if @@command.nil?
+        @@command = (Process.run("git", ["--version"]).success? rescue false)
       end
-      @@has_git_command
+      @@command
     end
 
-    protected def self.git_version
-      @@git_version ||= `git --version`.strip[12..-1]
+    protected def self.version
+      @@version ||= `git --version`.strip[12..-1]
     end
 
     protected def self.git_column_never
-      @@git_column_never ||= Versions.compare(git_version, "1.7.11") < 0 ? "--column=never" : ""
+      @@git_column_never ||= Versions.compare(version, "1.7.11") < 0 ? "--column=never" : ""
     end
 
     def read_spec(version : Version) : String?
@@ -176,16 +173,6 @@ module Shards
       rescue error : Error
         raise Error.new "Invalid #{SPEC_FILENAME} for shard #{name.inspect} at commit #{commit}: #{error.message}"
       end
-    end
-
-    private def spec?(version)
-      spec(version)
-    rescue Error
-    end
-
-    def available_releases : Array(Version)
-      update_local_cache
-      versions_from_tags
     end
 
     def latest_version_for_ref(ref : GitRef?) : Version
@@ -234,7 +221,7 @@ module Shards
 
     def local_path
       @local_path ||= begin
-        uri = parse_uri(git_url)
+        uri = parse_uri(vcs_url)
 
         path = uri.path
         path += ".git" unless path.ends_with?(".git")
@@ -250,10 +237,6 @@ module Shards
           File.join(Shards.cache_path, path)
         end
       end
-    end
-
-    def git_url
-      source.strip
     end
 
     def parse_requirement(params : Hash(String, String)) : Requirement
@@ -274,7 +257,7 @@ module Shards
 
     record GitVersion, value : String, commit : String? = nil
 
-    private def parse_git_version(version : Version) : GitVersion
+    private def parse_version(version : Version) : GitVersion
       case version.value
       when VERSION_REFERENCE
         GitVersion.new version.value
@@ -286,37 +269,12 @@ module Shards
     end
 
     private def git_ref(version : Version) : GitRef
-      git_version = parse_git_version(version)
-      if commit = git_version.commit
+      version = parse_version(version)
+      if commit = version.commit
         GitCommitRef.new commit
       else
-        GitTagRef.new "v#{git_version.value}"
+        GitTagRef.new "v#{version.value}"
       end
-    end
-
-    def update_local_cache
-      if cloned_repository? && origin_changed?
-        delete_repository
-        @updated_cache = false
-      end
-
-      return if Shards.local? || @updated_cache
-      Log.info { "Fetching #{git_url}" }
-
-      if cloned_repository?
-        # repositories cloned with shards v0.8.0 won't fetch any new remote
-        # refs; we must delete them and clone again!
-        if valid_repository?
-          fetch_repository
-        else
-          delete_repository
-          mirror_repository
-        end
-      else
-        mirror_repository
-      end
-
-      @updated_cache = true
     end
 
     private def mirror_repository
@@ -327,32 +285,19 @@ module Shards
       # be used interactively.
       # This configuration can be overridden by defining the environment
       # variable `GIT_ASKPASS`.
-      git_retry(err: "Failed to clone #{git_url}") do
-        run_in_folder "git clone -c core.askPass=true -c init.templateDir= --mirror --quiet -- #{Process.quote(git_url)} #{Process.quote(local_path)}"
+      vcs_retry(err: "Failed to clone #{vcs_url}") do
+        run_in_folder "git clone -c core.askPass=true -c init.templateDir= --mirror --quiet -- #{Process.quote(vcs_url)} #{Process.quote(local_path)}"
       end
     end
 
     private def fetch_repository
-      git_retry(err: "Failed to update #{git_url}") do
+      vcs_retry(err: "Failed to update #{vcs_url}") do
         run "git fetch --all --quiet"
       end
     end
 
-    private def git_retry(err = "Failed to fetch repository", &)
-      retries = 0
-      loop do
-        yield
-        break
-      rescue inner_err : Error
-        retries += 1
-        next if retries < 3
-        Log.debug { inner_err }
-        raise Error.new("#{err}: #{inner_err}")
-      end
-    end
-
     private def delete_repository
-      Log.debug { "rm -rf #{Process.quote(local_path)}'" }
+      Log.debug { "rm -rf #{Process.quote(local_path)}" }
       Shards::Helpers.rm_rf(local_path)
       @origin_url = nil
     end
@@ -376,92 +321,23 @@ module Shards
       @origin_url ||= capture("git ls-remote --get-url origin").strip
     end
 
-    # Returns whether origin URLs have differing hosts and/or paths.
-    protected def origin_changed?
-      return false if origin_url == git_url
-      return true if origin_url.nil? || git_url.nil?
-
-      origin_parsed = parse_uri(origin_url)
-      git_parsed = parse_uri(git_url)
-
-      (origin_parsed.host != git_parsed.host) || (origin_parsed.path != git_parsed.path)
-    end
-
-    # Parses a URI string, with additional support for ssh+git URI schemes.
-    private def parse_uri(raw_uri)
-      # Need to check for file URIs early, otherwise generic parsing will fail on a colon.
-      if (path = raw_uri.lchop?("file://"))
-        return URI.new(scheme: "file", path: path)
-      end
-
-      # Try normal URI parsing first
-      uri = URI.parse(raw_uri)
-      return uri if uri.absolute? && !uri.opaque?
-
-      # Otherwise, assume and attempt to parse the scp-style ssh URIs
-      host, _, path = raw_uri.partition(':')
-
-      if host.includes?('@')
-        user, _, host = host.partition('@')
-      end
-
-      # Normalize leading slash, matching URI parsing
-      unless path.starts_with?('/')
-        path = '/' + path
-      end
-
-      URI.new(scheme: "ssh", host: host, path: path, user: user)
-    end
-
     private def file_exists?(ref : GitRef, path)
       files = capture("git ls-tree -r --full-tree --name-only #{Process.quote(ref.to_git_ref)} -- #{Process.quote(path)}")
       !files.strip.empty?
     end
 
-    private def capture(command, path = local_path)
-      run(command, capture: true, path: path).not_nil!
-    end
-
-    private def run(command, path = local_path, capture = false)
-      if Shards.local? && !Dir.exists?(path)
-        dependency_name = File.basename(path, ".git")
-        raise Error.new("Missing repository cache for #{dependency_name.inspect}. Please run without --local to fetch it.")
-      end
-      run_in_folder(command, path, capture)
-    end
-
-    # Chdir to a folder and run command.
-    # Runs in current folder if `path` is nil.
-    private def run_in_folder(command, path : String? = nil, capture = false)
-      unless GitResolver.has_git_command?
+    private def error_if_command_is_missing
+      unless GitResolver.command?
         raise Error.new("Error missing git command line tool. Please install Git first!")
       end
-
-      Log.debug { command }
-
-      output = capture ? IO::Memory.new : Process::Redirect::Close
-      error = IO::Memory.new
-      status = Process.run(command, shell: true, output: output, error: error, chdir: path)
-
-      if status.success?
-        output.to_s if capture
-      else
-        str = error.to_s
-        if str.starts_with?("error: ") && (idx = str.index('\n'))
-          message = str[7...idx]
-          raise Error.new("Failed #{command} (#{message}). Maybe a commit, branch or file doesn't exist?")
-        else
-          raise Error.new("Failed #{command}.\n#{str}")
-        end
-      end
     end
 
-    def report_version(version : Version) : String
-      git_version = parse_git_version(version)
-      if commit = git_version.commit
-        "#{git_version.value} at #{commit[0...7]}"
+    private def error_for_run_failure(command, str : String)
+      if str.starts_with?("error: ") && (idx = str.index('\n'))
+        message = str[7...idx]
+        raise Error.new("Failed #{command} (#{message}). Maybe a commit, branch or file doesn't exist?")
       else
-        version.value
+        raise Error.new("Failed #{command}.\n#{str}")
       end
     end
 

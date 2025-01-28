@@ -5,10 +5,15 @@ private def resolver(name)
 end
 
 module Shards
-  # Allow overriding `source` for the specs
   class FossilResolver
+    # Allow overriding `source` for the specs
     def source=(@source)
       @origin_url = nil # This needs to be cleared so that #origin_url re-runs `fossil remote-url`
+    end
+
+    # Direct set tool version for testing
+    def self.set_version(verstr : String)
+      @@version = verstr
     end
   end
 
@@ -163,6 +168,40 @@ module Shards
       resolver.matches_ref?(FossilCommitRef.new("1234567890abcdef"), Shards::Version.new("0.1.0.+fossil.commit.1234567")).should be_true
       resolver.matches_ref?(FossilCommitRef.new("1234567890abcdef"), Shards::Version.new("0.1.0.+fossil.commit.1234567890abcdef")).should be_true
       resolver.matches_ref?(FossilCommitRef.new("1234567"), Shards::Version.new("0.1.0.+fossil.commit.1234567890abcdef")).should be_true
+    end
+
+    it "#supports_format_arg" do
+      installed_version = FossilResolver.version.not_nil!
+      resolver = FossilResolver.new("", "")
+      FossilResolver.set_version "1.37"
+      resolver.supports_format_arg?.should eq false
+      FossilResolver.set_version "2.12"
+      resolver.supports_format_arg?.should eq false
+      FossilResolver.set_version "2.13"
+      resolver.supports_format_arg?.should eq false
+      FossilResolver.set_version "2.14"
+      resolver.supports_format_arg?.should eq true
+      FossilResolver.set_version "2.15"
+      resolver.supports_format_arg?.should eq true
+      FossilResolver.set_version "3.0"
+      resolver.supports_format_arg?.should eq true
+      FossilResolver.set_version installed_version
+    end
+
+    it "#supports_workdir_arg" do
+      installed_version = FossilResolver.version.not_nil!
+      resolver = FossilResolver.new("", "")
+      FossilResolver.set_version "1.37"
+      resolver.supports_workdir_arg?.should eq false
+      FossilResolver.set_version "2.11"
+      resolver.supports_workdir_arg?.should eq false
+      FossilResolver.set_version "2.12"
+      resolver.supports_workdir_arg?.should eq true
+      FossilResolver.set_version "2.13"
+      resolver.supports_workdir_arg?.should eq true
+      FossilResolver.set_version "3.0"
+      resolver.supports_workdir_arg?.should eq true
+      FossilResolver.set_version installed_version
     end
   end
 end
