@@ -109,7 +109,7 @@ lib: shard.lock
 	$(SHARDS) install || (curl -L $(MOLINILLO_URL) | tar -xzf - -C lib/molinillo --strip-components=1)
 
 shard.lock: shard.yml
-	[ $(SHARDS) = false ] || $(SHARDS) update
+	([ $(SHARDS) = false ] && touch $@) || $(SHARDS) update
 
 man/%.gz: man/%
 	gzip -c -9 $< > $@
